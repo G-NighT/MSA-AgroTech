@@ -1,32 +1,38 @@
-@startuml C1-main
+@startuml context_v1
 ' C4-PlantUML (Context)
 !includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 LAYOUT_LEFT_RIGHT()
 
 title C1 — Платформа мониторинга скота (Kafka + MQTT, Edge-инференс)
 
-' === Акторы ===
-Person(op, "Оператор фермы", "Реагирует на события, подтверждает инциденты")
-Person(vet, "Ветврач/Зоотехник", "Анализирует состояние животных")
+' Акторы
+Person(op, "Оператор фермы", "Реакция на события, подтверждение инцидентов")
+Person(vet, "Ветврач/Зоотехник", "Анализ состояния животных")
 Person(dir, "Директор хозяйства", "Сводная аналитика и KPI")
 Person(analyst, "Аналитик", "Работа с BI/отчётами")
 Person(mobile, "Мобильное приложение", "Уведомления, быстрые действия")
 
-' === Ферма / Edge ===
+' Внешние системы
+System_Ext(cam, "IP-камеры", "RTSP/ONVIF")
+System_Ext(sensors, "Датчики/актуаторы", "кормушки, поилки, фильтры воды")
+System_Ext(bi, "BI/ВИ-система", "Витрины/отчёты")
+System_Ext(erp, "ERP", "REST/ETL: справочники/склад")
+System_Ext(notif, "Сервис уведомлений", "SMS/Email/WebPush")
+
+' Ферма / Edge
 System_Boundary(edge, "Ферма / Edge") {
-  System_Ext(cam, "IP-камеры", "RTSP, ночная съёмка")
-  System_Ext(sensors, "Датчики/актуаторы", "кормушки, поилки, фильтры воды")
   System(edgeAgent, "Агент фермы", "Видеоаналитика, управление устройствами, буфер, офлайн")
   System(edgeRunner, "Model Runner (plugins)", "Запуск партнёрских моделей локально, gRPC/Unix-socket")
   System(mqttLocal, "MQTT-брокер (локальный)", "Телеметрия/команды устройств")
-
-  Rel(cam, edgeAgent, "Live видео", "RTSP/WebRTC (LAN)")
-  Rel(sensors, mqttLocal, "Телеметрия", "MQTT")
-  Rel(edgeAgent, mqttLocal, "Подписка/команды", "MQTT")
-  Rel(edgeAgent, edgeRunner, "Инференс по кадру/клипу", "gRPC / shared fs")
 }
 
-' === Центр ===
+' Связи внешних устройств с Edge
+Rel(cam, edgeAgent, "Live-видео", "RTSP/WebRTC (LAN)")
+Rel(sensors, mqttLocal, "Телеметрия", "MQTT")
+Rel(edgeAgent, mqttLocal, "Подписка/команды", "MQTT")
+Rel(edgeAgent, edgeRunner, "Инференс по кадру/клипу", "gRPC / shared fs")
+
+' Центральная платформа
 System_Boundary(central, "Центральная платформа") {
   System(core, "Core: Платформа мониторинга", "Обработка событий, кейс-логика, оповещения")
   System(kafka, "Kafka (шина событий)", "События, телеметрия, журналы, CDC")
@@ -34,23 +40,29 @@ System_Boundary(central, "Центральная платформа") {
   System(auth, "IAM/SSO", "OIDC/SAML; RBAC")
   System(api, "API Gateway", "REST/gRPC для веб/мобилы и интеграций")
   System(reg, "Model Registry & Policy", "Реестр моделей, версии, политики выката, OTA-доставка")
-  System_Ext(erp, "ERP", "REST/ETL: справочники/склад")
-  System_Ext(bi, "BI/ВИ-система", "Витрины/отчёты")
-  System_Ext(notif, "Сервис уведомлений", "SMS/Email/WebPush")
 }
 
-' === Связи edge ↔ центр ===
-Rel(edgeAgent, kafka, "Публикует события/телеметрию\nincident.*, telemetry.*", "Kafka over TLS")
+' Связи Edge с Центром
+Rel(edgeAgent, kafka, "Публикует события/телеметрию", "Kafka over TLS")
 Rel(kafka, core, "Подписка на события", "Kafka consumer")
 Rel(edgeAgent, object, "Отправляет клипы/кадры по событию", "S3 API (pre-signed)")
-Rel(core, notif, "Оповещения", "HTTPS/WebPush")
+
+' API Gateway связи
 Rel(op, api, "Веб-портал", "HTTPS")
 Rel(mobile, api, "Мобильное приложение", "HTTPS")
 Rel(api, auth, "Аутентификация/авторизация", "OIDC/OAuth2")
+Rel(api, core, "Запросы UI/интеграций: инциденты, управление, отчёты", "REST/gRPC")
+Rel(api, core, "Онлайновые обновления ленты", "WebSocket/SSE")
+
+' Core с внешними системами/хранилищем
+Rel(core, object, "Читает артефакты, создаёт pre-signed URL", "S3 SDK")
+Rel(core, notif, "Оповещения", "HTTPS/WebPush")
 Rel(core, erp, "Интеграции", "REST/ETL")
-Rel(bi, object, "Доступ к данным/артефактам", "S3/Pre-signed")
 Rel(analyst, bi, "Аналитика и отчёты", "BI")
+Rel(bi, object, "Доступ к данным/артефактам", "S3/Pre-signed")
 Rel(dir, bi, "Дашборды KPI", "BI")
+
+' Доставка моделей
 Rel(reg, edgeAgent, "OTA-доставка артефактов моделей,\nполитики выката (canary/по локациям)", "HTTPS/S3")
 
 @enduml
