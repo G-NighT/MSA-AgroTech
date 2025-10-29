@@ -1,7 +1,7 @@
 @startuml C1-main
-' C4-PlantUML (Context)
 !includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
-LAYOUT_LEFT_RIGHT()
+
+left to right direction
 
 title C1 — Платформа мониторинга скота (Kafka + MQTT, Edge-инференс)
 
@@ -62,7 +62,7 @@ Rel(analyst, bi, "Аналитика и отчёты", "BI")
 Rel(bi, object, "Доступ к данным/артефактам", "S3/Pre-signed")
 Rel(dir, bi, "Дашборды KPI", "BI")
 
-' Доставка моделей
+' Доставка моделей/конфигов
 Rel(reg, edgeAgent, "OTA-доставка артефактов моделей,\nполитики выката (canary/по локациям)", "HTTPS/S3")
 
 @enduml

@@ -1,9 +1,9 @@
-@startuml C1-alt
-!includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+@startuml C2-alt
+!includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 
 top to bottom direction
 
-title C1 — Платформа мониторинга скота (RabbitMQ + MQTT, Edge-инференс)
+title C2 — Платформа мониторинга скота (RabbitMQ + MQTT, Edge-инференс)
 
 ' Акторы
 Person(op, "Оператор фермы", "Реакция на события, подтверждение инцидентов")
@@ -20,10 +20,11 @@ System_Ext(erp, "ERP", "REST/ETL: справочники/склад")
 System_Ext(notif, "Сервис уведомлений", "SMS/Email/WebPush")
 
 ' Ферма / Edge
-System_Boundary(edge, "Ферма / Edge") {
-  System(edgeAgent, "Агент фермы", "Видеоаналитика, управление устройствами, буфер, офлайн")
-  System(edgeRunner, "Model Runner (plugins)", "Запуск партнёрских моделей локально, gRPC/Unix-socket")
-  System(mqttLocal, "MQTT-брокер (локальный)", "Телеметрия/команды устройств")
+Boundary(edge, "Ферма / Edge") {
+  Container(edgeAgent, "Агент фермы", "Сервис", "Видеоаналитика, управление устройствами, буфер, офлайн")
+  Container(edgeRunner, "Model Runner (plugins)", "Сервис", "Запуск партнёрских моделей локально, gRPC/Unix-socket")
+  Container(mqttLocal, "MQTT-брокер (локальный)", "MQTT", "Телеметрия/команды устройств")
+  ContainerDb(edgeDb, "Локальная БД Edge", "SQLite/PostgreSQL", "Буфер событий/медиа, конфиги/ROI, версии моделей")
 }
 
 ' Связи внешних устройств с Edge
@@ -31,38 +32,45 @@ Rel(cam, edgeAgent, "Live-видео", "RTSP/WebRTC (LAN)")
 Rel(sensors, mqttLocal, "Телеметрия", "MQTT")
 Rel(edgeAgent, mqttLocal, "Подписка/команды", "MQTT")
 Rel(edgeAgent, edgeRunner, "Инференс по кадру/клипу", "gRPC / shared fs")
+Rel(edgeAgent, edgeDb, "Чтение/запись", "SQL")
 
 ' Центральная платформа
-System_Boundary(central, "Центральная платформа") {
-  System(core, "Core: Платформа мониторинга", "Обработка событий, кейс-логика, оповещения")
-  System(rmq, "RabbitMQ", "Очереди/топики: события, команды, алерты")
-  System(object, "Объектное хранилище (S3)", "Клипы/кадры/артефакты")
-  System(auth, "IAM/SSO", "OIDC/SAML; RBAC")
-  System(api, "API Gateway", "REST/gRPC для веб/мобилы и интеграций")
-  System(reg, "Model Registry & Policy", "Реестр моделей, версии, политики выката, OTA-доставка")
+Boundary(central, "Центральная платформа") {
+  Container(api, "API Gateway", "Сервис", "REST/gRPC для веб/мобилы и интеграций; WebSocket/SSE")
+  Container(auth, "IAM/SSO", "Сервис", "OIDC/SAML; RBAC")
+  Container(core, "Core: Платформа мониторинга", "Сервис", "Обработка событий, кейс-логика, оповещения")
+  Container(rmq, "RabbitMQ", "AMQP", "Очереди/топики: события, команды, алерты")
+  Container(object, "Объектное хранилище (S3)", "Хранилище", "Клипы/кадры/артефакты")
+  Container(reg, "Model Registry & Policy", "Сервис", "Реестр моделей, версии, политики выката, OTA-доставка")
+  ContainerDb(opdb, "Операционная БД", "PostgreSQL", "Инциденты, справочники, команды, outbox, конфиги")
+  ContainerDb(tsdb, "Хранилище телеметрии", "Timescale/ClickHouse", "Временные ряды и агрегаты")
 }
 
 ' Связи Edge с Центром
 Rel(edgeAgent, rmq, "Публикует события/телеметрию", "AMQP over TLS")
 Rel(core, rmq, "Подписка/команды", "AMQP")
-Rel(edgeAgent, object, "Отправляет клипы/кадры по событию", "S3 API (pre-signed)")
 
-' API Gateway связи
+' Пользователи и API
 Rel(op, api, "Веб-портал", "HTTPS")
 Rel(mobile, api, "Мобильное приложение", "HTTPS")
 Rel(api, auth, "Аутентификация/авторизация", "OIDC/OAuth2")
 Rel(api, core, "Запросы UI/интеграций: инциденты, управление, отчёты", "REST/gRPC")
 Rel(api, core, "Онлайновые обновления ленты", "WebSocket/SSE")
 
-' Core с внешними системами/хранилищем
+' Медиа
+Rel(edgeAgent, object, "Отправляет клипы/кадры по событию", "S3 API (pre-signed)")
 Rel(core, object, "Читает артефакты, создаёт pre-signed URL", "S3 SDK")
+
+' Данные и интеграции
+Rel(core, opdb, "CRUD/запросы", "SQL")
+Rel(core, tsdb, "Запись/чтение агрегатов телеметрии", "SQL")
 Rel(core, notif, "Оповещения", "HTTPS/WebPush")
 Rel(core, erp, "Интеграции", "REST/ETL")
 Rel(analyst, bi, "Аналитика и отчёты", "BI")
 Rel(bi, object, "Доступ к данным/артефактам", "S3/Pre-signed")
 Rel(dir, bi, "Дашборды KPI", "BI")
 
-' Доставка моделей
+' Доставка моделей/конфигов
 Rel(reg, edgeAgent, "OTA-доставка артефактов моделей,\nполитики выката (canary/по локациям)", "HTTPS/S3")
 
 @enduml
