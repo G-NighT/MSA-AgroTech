@@ -1,9 +1,9 @@
-@startuml context_v2
+@startuml C1-main
 ' C4-PlantUML (Context)
 !includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
-LAYOUT_TOP_DOWN()
+LAYOUT_LEFT_RIGHT()
 
-title C1 — Платформа мониторинга скота (RabbitMQ + MQTT, Edge-инференс)
+title C1 — Платформа мониторинга скота (Kafka + MQTT, Edge-инференс)
 
 ' Акторы
 Person(op, "Оператор фермы", "Реакция на события, подтверждение инцидентов")
@@ -35,7 +35,7 @@ Rel(edgeAgent, edgeRunner, "Инференс по кадру/клипу", "gRPC 
 ' Центральная платформа
 System_Boundary(central, "Центральная платформа") {
   System(core, "Core: Платформа мониторинга", "Обработка событий, кейс-логика, оповещения")
-  System(rmq, "RabbitMQ", "Очереди/топики: события, команды, алерты")
+  System(kafka, "Kafka (шина событий)", "События, телеметрия, журналы, CDC")
   System(object, "Объектное хранилище (S3)", "Клипы/кадры/артефакты")
   System(auth, "IAM/SSO", "OIDC/SAML; RBAC")
   System(api, "API Gateway", "REST/gRPC для веб/мобилы и интеграций")
@@ -43,8 +43,8 @@ System_Boundary(central, "Центральная платформа") {
 }
 
 ' Связи Edge с Центром
-Rel(edgeAgent, rmq, "Публикует события/телеметрию", "AMQP over TLS")
-Rel(core, rmq, "Подписка/команды", "AMQP")
+Rel(edgeAgent, kafka, "Публикует события/телеметрию", "Kafka over TLS")
+Rel(kafka, core, "Подписка на события", "Kafka consumer")
 Rel(edgeAgent, object, "Отправляет клипы/кадры по событию", "S3 API (pre-signed)")
 
 ' API Gateway связи
