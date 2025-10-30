@@ -1,0 +1,52 @@
+@startuml C3-main-core
+
+!includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+left to right direction
+
+title C3 — Core: Платформа мониторинга (Kafka + MQTT)
+
+Container_Boundary(core, "Core: Платформа мониторинга") {
+  Component(RestApi, "REST/gRPC API", "Controller", "Эндпоинты: инциденты, управление, отчёты")
+  Component(Realtime, "Realtime Gateway", "WS/SSE", "Онлайновые обновления ленты событий")
+  Component(EventConsumer, "Event Consumer", "Kafka consumer", "Читает incident.* / telemetry.*")
+  Component(EventProducer, "Event Producer", "Kafka producer", "Публикует события домена/команды")
+  Component(IncidentSvc, "Incident Service", "Domain service", "Правила, статусы, эскалации, SLA")
+  Component(DeviceOrch, "Device Orchestrator", "Saga/Orchestrator", "Команды устройствам, компенсации")
+  Component(ConfigClient, "Config Client", "Client", "Читает пороги/ROI/фичи (Config Service)")
+  Component(MediaClient, "Media Client", "Client", "Pre-signed URL, артефакты клипов/кадров")
+  Component(NotifClient, "Notification Client", "Client", "Отправка оповещений (SMS/Email/WebPush)")
+  Component(ErpClient, "ERP Client", "Client", "Запись/чтение в ERP (REST/ETL)")
+  Component(Repo, "Repositories", "DAL", "Incidents/Devices/Settings + Outbox")
+  Component(Metrics, "Observability", "Tracing/Metrics", "Метрики, логи, трейсинг, correlationId")
+}
+
+System_Ext(kafka, "Kafka (шина событий)", "incident.*, telemetry.*, commands.*")
+SystemDb(opdb, "Операционная БД", "PostgreSQL", "Инциденты, справочники, команды, outbox, конфиги")
+System_Ext(object, "Объектное хранилище (S3)", "Клипы/кадры/артефакты")
+System_Ext(notif, "Сервис уведомлений", "HTTPS/WebPush")
+System_Ext(erp, "ERP", "REST/ETL")
+System_Ext(auth, "IAM/SSO", "OIDC/SAML; RBAC")
+
+Rel(RestApi, auth, "Проверка токенов/JWK", "OIDC/OAuth2")
+Rel(RestApi, IncidentSvc, "CRUD/команды")
+Rel(Realtime, IncidentSvc, "События для онлайна")
+Rel(EventConsumer, IncidentSvc, "инциденты/телеметрия")
+Rel(IncidentSvc, EventProducer, "доменные события, команды")
+Rel(IncidentSvc, DeviceOrch, "запуск/статус саг")
+Rel(DeviceOrch, EventProducer, "commands.*")
+Rel(IncidentSvc, ConfigClient, "получает пороги/ROI")
+Rel(IncidentSvc, MediaClient, "требует ссылки на клипы/кадры")
+Rel(MediaClient, object, "pre-signed, TTL", "S3 SDK")
+Rel(IncidentSvc, NotifClient, "уведомления")
+Rel(NotifClient, notif, "SMS/Email/WebPush")
+Rel(IncidentSvc, ErpClient, "интеграции")
+Rel(ErpClient, erp, "REST/ETL")
+Rel(Repo, opdb, "SQL")
+Rel(EventConsumer, kafka, "Читает", "Kafka")
+Rel(EventProducer, kafka, "Пишет", "Kafka")
+Rel(IncidentSvc, Repo, "чтение/запись")
+Rel(Metrics, IncidentSvc, "метрики/трейсинг")
+Rel(Metrics, EventConsumer, "логирование/трейсинг")
+
+@enduml
