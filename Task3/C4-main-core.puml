@@ -1,0 +1,154 @@
+@startuml C4-main-core
+
+left to right direction
+
+title C4 — Код Core/Incident Service (Kafka)
+
+' Контроллер/хендлеры
+class IncidentController <<REST/gRPC endpoints>> {
+  +createIncident(req: CreateIncidentDto): IncidentDto
+  +confirmIncident(id: UUID, req: ConfirmDto): IncidentDto
+  +getIncident(id: UUID): IncidentDto
+  +searchIncidents(q: IncidentQuery): IncidentPage
+}
+
+class IncidentEventHandler <<Kafka consumer handler>> {
+  -topicIncident: "incident.*"
+  -topicTelemetry: "telemetry.*"
+  +onIncidentEvent(event: IncidentEvent): void
+  +onTelemetryEvent(event: TelemetryEvent): void
+}
+
+' Домен
+class IncidentService <<domain>> {
+  -repo: IIncidentRepository
+  -publisher: IDomainEventPublisher
+  -notif: NotificationClient
+  -media: MediaClient
+  -config: ConfigClient
+  -workflow: IncidentWorkflow
+  +handleCreate(cmd: CreateIncidentCmd): Incident
+  +handleConfirm(cmd: ConfirmIncidentCmd): Incident
+  +handleAutoClose(cmd: AutoCloseCmd): Incident
+  +projectTelemetry(event: TelemetryEvent): void
+}
+
+class IncidentWorkflow <<state/SLA>> {
+  +next(current: Status, transition: Transition): Status
+  +deadline(severity: Severity): Duration
+  +shouldEscalate(inc: Incident, now: Instant): boolean
+}
+
+' Репозиторий/Outbox
+interface IIncidentRepository {
+  +save(inc: Incident): void
+  +findById(id: UUID): Optional<Incident>
+  +search(q: IncidentQuery): IncidentPage
+  +appendOutbox(record: OutboxRecord): void
+  +pullOutbox(batch: int): List<OutboxRecord>
+}
+
+class SqlIncidentRepository <<PostgreSQL>> {
+  -ds: DataSource
+  -tableInc: "incidents"
+  -tableOutbox: "outbox"
+  +save(inc: Incident): void
+  +findById(id: UUID): Optional<Incident>
+  +search(q: IncidentQuery): IncidentPage
+  +appendOutbox(record: OutboxRecord): void
+  +pullOutbox(batch: int): List<OutboxRecord>
+}
+
+' Паблишер событий
+interface IDomainEventPublisher {
+  +publish(event: DomainEvent, key: String): void
+  +publishBatch(events: List<DomainEvent>): void
+}
+
+class KafkaEventPublisher <<producer → incident.* / commands.*>> {
+  -producer: KafkaProducer<String, byte[]>
+  -topicIncident: String = "incident.events"
+  -topicCommands: String = "commands.out"
+  +publish(event: DomainEvent, key: String): void
+  +publishBatch(events: List<DomainEvent>): void
+}
+
+' Клиенты
+class NotificationClient <<HTTPS/WebPush>> {
+  -endpoint: URL
+  +send(to: Recipient, msg: Notification): void
+  +escalate(to: OnCall, inc: Incident): void
+}
+
+class MediaClient <<S3 presign>> {
+  -bucket: String
+  +presignClip(uri: Uri, ttl: Duration): URL
+  +presignFrame(uri: Uri, ttl: Duration): URL
+}
+
+class ConfigClient <<REST to Config Service>> {
+  +thresholds(farmId: UUID, model: String): Thresholds
+  +roi(cameraId: UUID): RegionOfInterest
+  +featureEnabled(flag: String, farmId: UUID): boolean
+}
+
+' DTO/Events/Entities
+class Dto <<DTO>> {
+  +CreateIncidentDto
+  +IncidentDto
+  +ConfirmDto
+  +IncidentQuery
+  +IncidentPage
+}
+
+class Events <<DomainEvents>> {
+  +IncidentCreated(id: UUID, severity: Severity, clip: Uri)
+  +IncidentConfirmed(id: UUID, by: UUID, at: Instant)
+  +IncidentResolved(id: UUID, reason: String)
+}
+
+class Incident {
+  +id: UUID
+  +farmId: UUID
+  +cameraId: UUID
+  +type: String
+  +severity: Severity
+  +status: Status
+  +startedAt: Instant
+  +confirmedBy: UUID
+  +clipUri: Uri
+  +meta: Map<String, String>
+}
+
+class OutboxRecord {
+  +id: UUID
+  +type: String
+  +payload: byte[]
+  +createdAt: Instant
+}
+
+' Связи
+IncidentController --> IncidentService : команды/запросы
+IncidentEventHandler --> IncidentService : inbound события
+IncidentService --> IIncidentRepository : persist/query
+SqlIncidentRepository -up-|> IIncidentRepository
+IncidentService --> IDomainEventPublisher : publish(event)
+KafkaEventPublisher -up-|> IDomainEventPublisher
+IncidentService --> NotificationClient : уведомления/эскалации
+IncidentService --> MediaClient : presign links
+IncidentService --> ConfigClient : thresholds/roi/features
+IncidentService --> IncidentWorkflow : проверка переходов/SLA
+
+' Раскомментируйте связи ниже, чтобы показать зависимости моделей (что чем пользуется)
+'IncidentController ..> Dto : uses
+'IncidentEventHandler ..> Events : consumes
+'IncidentService ..> Incident : manipulates
+'IncidentService ..> Events : raises
+'IIncidentRepository ..> Incident : persists
+'SqlIncidentRepository ..> Incident : maps
+'IIncidentRepository ..> OutboxRecord : outbox
+'SqlIncidentRepository ..> OutboxRecord : outbox
+'IDomainEventPublisher ..> Events : publishes
+'KafkaEventPublisher ..> Events : publishes
+
+@enduml
