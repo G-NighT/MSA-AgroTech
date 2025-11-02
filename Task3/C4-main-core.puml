@@ -2,7 +2,7 @@
 
 left to right direction
 
-title C4 — Код Core/Incident Service (Kafka)
+title C4 — Код: Incident Service (Core: Платформа мониторинга, Edge-first)
 
 ' Контроллер/хендлеры
 class IncidentController <<REST/gRPC endpoints>> {

@@ -4,7 +4,7 @@
 
 top to bottom direction
 
-title C2 — Платформа мониторинга скота (RabbitMQ + MQTT, Edge-инференс)
+title C2 — Платформа мониторинга скота (Cloud-first: центральный инференс, тонкий Edge)
 
 ' Акторы
 Person(op, "Оператор фермы", "Реакция на события, подтверждение инцидентов")
@@ -20,58 +20,75 @@ System_Ext(bi, "BI/ВИ-система", "Витрины/отчёты")
 System_Ext(erp, "ERP", "REST/ETL: справочники/склад")
 System_Ext(notif, "Сервис уведомлений", "SMS/Email/WebPush")
 
-' Ферма / Edge
-Boundary(edge, "Ферма / Edge") {
-  Container(edgeAgent, "Агент фермы", "Сервис", "Видеоаналитика, управление устройствами, буфер, офлайн")
-  Container(edgeRunner, "Model Runner (plugins)", "Сервис", "Запуск партнёрских моделей локально, gRPC/Unix-socket")
-  Container(mqttLocal, "MQTT-брокер (локальный)", "MQTT", "Телеметрия/команды устройств")
-  ContainerDb(edgeDb, "Локальная БД Edge", "SQLite/PostgreSQL", "Буфер событий/медиа, конфиги/ROI, версии моделей")
+' Ферма / Edge (тонкий агент)
+Boundary(edge, "Ферма / Edge (тонкий агент)") {
+  Container(edgeAgent, "Агент фермы (тонкий)", "Сервис", "Захват видео, буфер/очередь, шифрование, отправка в центр")
+  Container(edgeFallback, "Fallback-эвристики", "Сервис", "Простейшие локальные правила при офлайне (без нейросетей)")
+  ContainerDb(edgeDb, "Локальная БД Edge", "SQLite", "Буфер клипов/метаданных, очередь на отправку")
 }
 
-' Связи внешних устройств с Edge
+' Связи Edge
 Rel(cam, edgeAgent, "Live-видео", "RTSP/WebRTC (LAN)")
-Rel(sensors, mqttLocal, "Телеметрия", "MQTT")
-Rel(edgeAgent, mqttLocal, "Подписка/команды", "MQTT")
-Rel(edgeAgent, edgeRunner, "Инференс по кадру/клипу", "gRPC / shared fs")
-Rel(edgeAgent, edgeDb, "Чтение/запись", "SQL")
+Rel(edgeAgent, edgeDb, "Буфер при офлайне", "SQL")
 
-' Центральная платформа
-Boundary(central, "Центральная платформа") {
+' Центральная платформа (cloud-first)
+Boundary(central, "Центральная платформа (cloud-first)") {
   Container(api, "API Gateway", "Сервис", "REST/gRPC для веб/мобилы и интеграций; WebSocket/SSE")
   Container(auth, "IAM/SSO", "Сервис", "OIDC/SAML; RBAC")
-  Container(core, "Core: Платформа мониторинга", "Сервис", "Обработка событий, кейс-логика, оповещения")
-  Container(rmq, "RabbitMQ", "AMQP", "Очереди/топики: события, команды, алерты")
-  Container(object, "Объектное хранилище (S3)", "Хранилище", "Клипы/кадры/артефакты")
-  Container(reg, "Model Registry & Policy", "Сервис", "Реестр моделей, версии, политики выката, OTA-доставка")
-  ContainerDb(opdb, "Операционная БД", "PostgreSQL", "Инциденты, справочники, команды, outbox, конфиги")
-  ContainerDb(tsdb, "Хранилище телеметрии", "Timescale/ClickHouse", "Временные ряды и агрегаты")
-}
 
-' Связи Edge с Центром
-Rel(edgeAgent, rmq, "Публикует события/телеметрию", "AMQP over TLS")
-Rel(core, rmq, "Подписка/команды", "AMQP")
+  Container(streamGw, "Stream Gateway", "Сервис", "Ингест Live-видео с ферм (WebRTC/RTMP), нарезка клипов")
+  Container(infer, "Realtime Inference (GPU)", "Сервис", "Центральный инференс; запуск партнёрских моделей; gRPC")
+  Container(orchestrator, "Core: Платформа мониторинга", "Сервис", "Обработка результатов инференса, кейс-логика, оповещения")
+  Container(iot, "IoT Core (MQTT)", "Брокер", "Телеметрия/команды устройств, единая точка для всех ферм")
+
+  Container(mediaSvc, "Media Service", "Сервис", "Загрузка и выдача pre-signed URL для клипов/кадров")
+  Container(configSvc, "Config/Feature Service", "Сервис", "Пороги, ROI, фичфлаги, таргетинг по фермам/камерам")
+  Container(reg, "Model Registry & Policy", "Сервис", "Реестр/версии моделей, политика выката; доставка в GPU-кластер")
+
+  Container(eventBus, "Event Bus (pub/sub)", "Сервис", "Внутренняя шина событий: inference.results, incidents, alerts")
+  ContainerDb(opDb, "Операционная БД", "PostgreSQL", "Инциденты, кейсы, справочники, outbox")
+  ContainerDb(tsDb, "Хранилище телеметрии", "Timescale/ClickHouse", "Ряды/агрегаты")
+  Container(object, "Объектное хранилище (S3)", "Хранилище", "Клипы/кадры/артефакты")
+  Container(cache, "Redis (опц.)", "Кэш", "Сессии WS, rate-limit, краткоживущие данные")
+}
 
 ' Пользователи и API
 Rel(op, api, "Веб-портал", "HTTPS")
+Rel(vet, api, "Веб-портал", "HTTPS")
 Rel(mobile, api, "Мобильное приложение", "HTTPS")
 Rel(api, auth, "Аутентификация/авторизация", "OIDC/OAuth2")
-Rel(api, core, "Запросы UI/интеграций: инциденты, управление, отчёты", "REST/gRPC")
-Rel(api, core, "Онлайновые обновления ленты", "WebSocket/SSE")
+Rel(api, orchestrator, "Запросы UI/интеграций", "REST/gRPC")
+Rel(api, orchestrator, "Онлайновые обновления ленты", "WS/SSE")
 
-' Медиа
-Rel(edgeAgent, object, "Отправляет клипы/кадры по событию", "S3 API (pre-signed)")
-Rel(core, object, "Читает артефакты, создаёт pre-signed URL", "S3 SDK")
+' Видеопотоки и инференс
+Rel(edgeAgent, streamGw, "Поток видео/клипы", "WebRTC/RTMP")
+Rel(streamGw, infer, "Кадры/клипы на инференс", "gRPC")
+Rel(infer, eventBus, "Публикует результаты", "pub/sub")
+Rel(eventBus, orchestrator, "Подписка на результаты", "pub/sub")
 
-' Данные и интеграции
-Rel(core, opdb, "CRUD/запросы", "SQL")
-Rel(core, tsdb, "Запись/чтение агрегатов телеметрии", "SQL")
-Rel(core, notif, "Оповещения", "HTTPS/WebPush")
-Rel(core, erp, "Интеграции", "REST/ETL")
-Rel(analyst, bi, "Аналитика и отчёты", "BI")
-Rel(bi, object, "Доступ к данным/артефактам", "S3/Pre-signed")
+' Телеметрия/команды
+Rel(sensors, iot, "Телеметрия/статусы", "MQTT")
+Rel(orchestrator, iot, "Команды устройствам", "MQTT")
+
+' Медиа и данные
+Rel(edgeAgent, object, "Загрузка клипов/кадров по событию", "S3 API (pre-signed)")
+Rel(mediaSvc, object, "Генерирует pre-signed URL; политика TTL", "S3 SDK")
+Rel(api, mediaSvc, "Запрос ссылок из UI/мобилы", "REST")
+
+Rel(orchestrator, opDb, "CRUD/запросы", "SQL")
+Rel(orchestrator, tsDb, "Запись агрегатов/ряды", "SQL")
+Rel(orchestrator, cache, "Кэш/сессии/троттлинг", "Redis")
+
+' Интеграции
+Rel(orchestrator, notif, "Оповещения", "HTTPS/WebPush")
+Rel(orchestrator, erp, "Интеграции", "REST/ETL")
+Rel(analyst, bi, "Витрины/отчёты", "BI")
+Rel(bi, object, "Читает артефакты", "S3/Pre-signed")
 Rel(dir, bi, "Дашборды KPI", "BI")
 
-' Доставка моделей/конфигов
-Rel(reg, edgeAgent, "OTA-доставка артефактов моделей,\nполитики выката (canary/по локациям)", "HTTPS/S3")
+' Управление моделями/конфигами
+Rel(reg, infer, "Выкат моделей и политики", "HTTPS")
+Rel(configSvc, orchestrator, "Пороговые значения/ROI/фичи", "REST")
+Rel(edgeFallback, op, "Локальные оповещения при офлайне", "Звук/свет/SMS локального провайдера")
 
 @enduml

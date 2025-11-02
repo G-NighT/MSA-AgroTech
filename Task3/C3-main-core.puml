@@ -4,7 +4,7 @@
 
 left to right direction
 
-title C3 — Core: Платформа мониторинга (Kafka + MQTT)
+title C3 — Core: Платформа мониторинга (Edge-first)
 
 Container_Boundary(core, "Core: Платформа мониторинга") {
   Component(RestApi, "REST/gRPC API", "Controller", "Эндпоинты: инциденты, управление, отчёты")

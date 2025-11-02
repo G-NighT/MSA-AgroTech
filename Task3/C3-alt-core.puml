@@ -4,48 +4,76 @@
 
 top to bottom direction
 
-title C3 — Core: Платформа мониторинга (RabbitMQ + MQTT)
+title C3 — Core: Платформа мониторинга (Cloud-first)
 
+' Граница сервиса Core
 Container_Boundary(core, "Core: Платформа мониторинга") {
-  Component(RestApi, "REST/gRPC API", "Controller", "Эндпоинты: инциденты, управление, отчёты")
-  Component(Realtime, "Realtime Gateway", "WS/SSE", "Онлайновые обновления")
-  Component(EventConsumer, "Event Consumer", "AMQP consumer", "Очереди/топики: events, telemetry")
-  Component(EventProducer, "Event Producer", "AMQP producer", "Команды/доменные события")
-  Component(IncidentSvc, "Incident Service", "Domain service", "Правила/эскалации/SLA")
-  Component(DeviceOrch, "Device Orchestrator", "Saga", "Команды к устройствам, компенсации")
-  Component(ConfigClient, "Config Client", "Client", "Пороговые/ROI")
-  Component(MediaClient, "Media Client", "Client", "Pre-signed URL")
+
+  Component(IntApi, "Internal API (Core)", "REST/gRPC", "Эндпоинты для UI/интеграций: инциденты, управление, отчёты")
+  Component(Realtime, "Realtime Stream Adapter", "WS/SSE", "Пуш событий для онлайн-ленты в UI через API Gateway")
+
+  Component(ResultsSub, "Inference Results Subscriber", "EventBus consumer", "Подписка на inference.results")
+  Component(RuleEngine, "Rule Engine", "Rules/Correlation", "Корреляция результатов инференса, фильтры, дедупликация")
+  Component(IncidentSvc, "Incident Service", "Domain", "Жизненный цикл инцидентов, статусы, SLA, эскалации")
+  Component(DeviceOrch, "Device Orchestrator", "Saga/Orchestrator", "Команды устройствам, компенсации")
+
+  Component(IoTCmd, "IoT Command Adapter", "MQTT producer", "Публикация команд в IoT Core")
+  Component(MediaClient, "Media Client", "Client", "Pre-signed URL для клипов/кадров")
+  Component(ConfigClient, "Config Client", "Client", "Пороги/ROI/фичфлаги")
   Component(NotifClient, "Notification Client", "Client", "SMS/Email/WebPush")
-  Component(ErpClient, "ERP Client", "Client", "REST/ETL")
+  Component(ErpClient, "ERP Client", "Client", "REST/ETL интеграции")
+
   Component(Repo, "Repositories", "DAL", "Incidents/Devices/Settings + Outbox")
-  Component(Metrics, "Observability", "Tracing/Metrics", "Метрики/логи/трейсинг")
+  Component(OutboxPub, "Outbox Publisher", "EventBus producer", "Публикация доменных событий incidents.*")
+  Component(TSWriter, "Telemetry Writer", "Writer", "Запись агрегатов/рядов в TSDB")
 }
 
-System_Ext(rmq, "RabbitMQ", "AMQP: events, telemetry, commands")
-SystemDb(opdb, "Операционная БД", "PostgreSQL", "Инциденты, справочники, команды, outbox, конфиги")
-System_Ext(object, "Объектное хранилище (S3)", "Клипы/кадры/артефакты")
-System_Ext(notif, "Сервис уведомлений", "HTTPS/WebPush")
+' ==== Соседи из C2-alt ====
+Container(eventBus, "Event Bus (pub/sub)", "Service", "inference.results, incidents, alerts")
+Container(iot, "IoT Core (MQTT)", "Broker", "Телеметрия/команды устройств")
+Container(mediaSvc, "Media Service", "Service", "Pre-signed URL")
+Container(configSvc, "Config/Feature Service", "Service", "Пороговые/ROI/фичи")
+Container(auth, "IAM/SSO", "Service", "OIDC/SAML; RBAC")
+Container(apiGw, "API Gateway", "Service", "REST/gRPC; WebSocket/SSE")
+ContainerDb(opDb, "Операционная БД", "PostgreSQL", "Инциденты, кейсы, справочники, outbox")
+ContainerDb(tsDb, "Хранилище телеметрии", "Timescale/ClickHouse", "Ряды и агрегаты")
+System_Ext(notif, "Сервис уведомлений", "SMS/Email/WebPush")
 System_Ext(erp, "ERP", "REST/ETL")
-System_Ext(auth, "IAM/SSO", "OIDC/SAML; RBAC")
 
-Rel(RestApi, auth, "Проверка токенов/JWK", "OIDC/OAuth2")
-Rel(RestApi, IncidentSvc, "CRUD/команды")
-Rel(Realtime, IncidentSvc, "события для онлайна")
-Rel(EventConsumer, IncidentSvc, "events/telemetry")
-Rel(IncidentSvc, EventProducer, "domain events/commands")
-Rel(IncidentSvc, DeviceOrch, "оркестрация")
-Rel(DeviceOrch, EventProducer, "commands")
-Rel(IncidentSvc, ConfigClient, "пороги/ROI")
-Rel(IncidentSvc, MediaClient, "ссылки на клипы/кадры")
-Rel(MediaClient, object, "pre-signed, TTL", "S3 SDK")
-Rel(IncidentSvc, NotifClient, "уведомления")
-Rel(NotifClient, notif, "SMS/Email/WebPush")
-Rel(IncidentSvc, ErpClient, "интеграции")
+' ==== Взаимодействия ====
+Rel(apiGw, IntApi, "Запросы UI/интеграций", "REST/gRPC")
+Rel(Realtime, apiGw, "Онлайновые события для ленты", "WS/SSE")
+
+Rel(ResultsSub, eventBus, "Подписка на inference.results", "subscribe")
+Rel(ResultsSub, RuleEngine, "Результаты инференса")
+Rel(RuleEngine, IncidentSvc, "Создание/обновление инцидентов")
+
+Rel(IncidentSvc, DeviceOrch, "Запуск/статус саг")
+Rel(DeviceOrch, IoTCmd, "Команды устройствам")
+Rel(IoTCmd, iot, "publish commands", "MQTT")
+
+Rel(IncidentSvc, MediaClient, "Ссылки на клипы/кадры")
+Rel(MediaClient, mediaSvc, "pre-signed URL")
+
+Rel(IncidentSvc, ConfigClient, "Пороги/ROI/фичи")
+Rel(ConfigClient, configSvc, "REST")
+
+Rel(IncidentSvc, NotifClient, "Оповещения/эскалации")
+Rel(NotifClient, notif, "HTTPS")
+
+Rel(IncidentSvc, ErpClient, "Интеграции")
 Rel(ErpClient, erp, "REST/ETL")
-Rel(Repo, opdb, "SQL")
-Rel(EventConsumer, rmq, "Consume", "AMQP")
-Rel(EventProducer, rmq, "Publish", "AMQP")
-Rel(IncidentSvc, Repo, "чтение/запись")
-Rel(Metrics, IncidentSvc, "метрики/трейсинг")
+
+Rel(IncidentSvc, Repo, "Чтение/запись")
+Rel(Repo, opDb, "SQL")
+
+Rel(IncidentSvc, OutboxPub, "Публикация доменных событий")
+Rel(OutboxPub, eventBus, "publish incidents.*")
+
+Rel(RuleEngine, TSWriter, "Агрегаты/метрики")
+Rel(TSWriter, tsDb, "SQL")
+
+' (Необязательно) валидация токенов на входе через шлюз
+Rel(apiGw, auth, "Валидация токенов", "OIDC/OAuth2")
 
 @enduml

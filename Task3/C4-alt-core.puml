@@ -1,8 +1,8 @@
 @startuml C4-alt-core
 
-top to bottom direction
+left to right direction
 
-title C4 — Код Core/Incident Service (RabbitMQ)
+title C4 — Код: Incident Service (Core: Платформа мониторинга, Cloud-first)
 
 ' Контроллер/хендлеры
 class IncidentController <<REST/gRPC endpoints>> {
@@ -10,27 +10,30 @@ class IncidentController <<REST/gRPC endpoints>> {
   +confirmIncident(id: UUID, req: ConfirmDto): IncidentDto
   +getIncident(id: UUID): IncidentDto
   +searchIncidents(q: IncidentQuery): IncidentPage
+  +acknowledge(id: UUID, by: UUID): IncidentDto
+  +resolve(id: UUID, req: ResolveDto): IncidentDto
 }
 
-class IncidentEventHandler <<AMQP consumer handler>> {
-  -queueEvents: "events.in"
-  -queueTelemetry: "telemetry.in"
-  +onMessage(msg: AmqpMessage): void
-  +onTelemetry(msg: AmqpMessage): void
+class InferenceResultHandler <<EventBus consumer>> {
+  -subscription: "inference.results"
+  +onMessage(evt: InferenceResultEvent): void
 }
 
 ' Домен
 class IncidentService <<domain>> {
   -repo: IIncidentRepository
-  -publisher: IDomainEventPublisher
+  -publisher: IEventPublisher
+  -orchestrator: IDeviceOrchestratorPort
   -notif: NotificationClient
   -media: MediaClient
   -config: ConfigClient
   -workflow: IncidentWorkflow
   +handleCreate(cmd: CreateIncidentCmd): Incident
   +handleConfirm(cmd: ConfirmIncidentCmd): Incident
-  +handleAutoClose(cmd: AutoCloseCmd): Incident
-  +projectTelemetry(event: TelemetryEvent): void
+  +handleResolve(cmd: ResolveIncidentCmd): Incident
+  +handleAcknowledge(cmd: AckIncidentCmd): Incident
+  +projectInference(evt: InferenceResultEvent): void
+  +applySlaAndEscalation(inc: Incident, now: Instant): void
 }
 
 class IncidentWorkflow <<state/SLA>> {
@@ -39,13 +42,13 @@ class IncidentWorkflow <<state/SLA>> {
   +shouldEscalate(inc: Incident, now: Instant): boolean
 }
 
-' Репозиторий/Outbox
+' Порты/адаптеры
 interface IIncidentRepository {
   +save(inc: Incident): void
   +findById(id: UUID): Optional<Incident>
   +search(q: IncidentQuery): IncidentPage
-  +appendOutbox(record: OutboxRecord): void
-  +pullOutbox(batch: int): List<OutboxRecord>
+  +appendOutbox(r: OutboxRecord): void
+  +pullOutbox(batchSize: int): List<OutboxRecord>
 }
 
 class SqlIncidentRepository <<PostgreSQL>> {
@@ -55,25 +58,33 @@ class SqlIncidentRepository <<PostgreSQL>> {
   +save(inc: Incident): void
   +findById(id: UUID): Optional<Incident>
   +search(q: IncidentQuery): IncidentPage
-  +appendOutbox(record: OutboxRecord): void
-  +pullOutbox(batch: int): List<OutboxRecord>
+  +appendOutbox(r: OutboxRecord): void
+  +pullOutbox(batchSize: int): List<OutboxRecord>
 }
 
-' Паблишер событий
-interface IDomainEventPublisher {
-  +publish(event: DomainEvent, routingKey: String): void
-  +publishBatch(events: List<DomainEvent>, routingKey: String): void
+interface IEventPublisher {
+  +publish(evt: DomainEvent, topic: String): void
+  +publishBatch(evts: List<DomainEvent>, topic: String): void
 }
 
-class AmqpEventPublisher <<AMQP producer → events/commands>> {
-  -channel: AmqpChannel
-  -exchangeEvents: "events"
-  -exchangeCommands: "commands"
-  +publish(event: DomainEvent, routingKey: String): void
-  +publishBatch(events: List<DomainEvent>, routingKey: String): void
+class EventBusPublisher <<pub/sub producer>> {
+  -bus: EventBusClient
+  -topicIncidents: "incidents.events"
+  +publish(evt: DomainEvent, topic: String): void
+  +publishBatch(evts: List<DomainEvent>, topic: String): void
 }
 
-' Клиенты
+interface IDeviceOrchestratorPort {
+  +startAction(cmd: DeviceCommand): CommandId
+  +getActionStatus(id: CommandId): DeviceCommandStatus
+}
+
+class DeviceOrchestratorClient <<adapter>> {
+  -endpoint: URL
+  +startAction(cmd: DeviceCommand): CommandId
+  +getActionStatus(id: CommandId): DeviceCommandStatus
+}
+
 class NotificationClient <<HTTPS/WebPush>> {
   -endpoint: URL
   +send(to: Recipient, msg: Notification): void
@@ -92,21 +103,7 @@ class ConfigClient <<REST to Config Service>> {
   +featureEnabled(flag: String, farmId: UUID): boolean
 }
 
-' DTO/Events/Entities
-class Dto <<DTO>> {
-  +CreateIncidentDto
-  +IncidentDto
-  +ConfirmDto
-  +IncidentQuery
-  +IncidentPage
-}
-
-class Events <<DomainEvents>> {
-  +IncidentCreated(id: UUID, severity: Severity, clip: Uri)
-  +IncidentConfirmed(id: UUID, by: UUID, at: Instant)
-  +IncidentResolved(id: UUID, reason: String)
-}
-
+' Модели/DTO/События/Команды
 class Incident {
   +id: UUID
   +farmId: UUID
@@ -115,9 +112,11 @@ class Incident {
   +severity: Severity
   +status: Status
   +startedAt: Instant
+  +ackBy: UUID
   +confirmedBy: UUID
+  +resolvedAt: Instant
   +clipUri: Uri
-  +meta: Map<String, String>
+  +meta: Map<String,String>
 }
 
 class OutboxRecord {
@@ -127,28 +126,72 @@ class OutboxRecord {
   +createdAt: Instant
 }
 
+class Dto <<DTO>> {
+  +CreateIncidentDto
+  +IncidentDto
+  +ConfirmDto
+  +ResolveDto
+  +IncidentQuery
+  +IncidentPage
+}
+
+class Events <<DomainEvents>> {
+  +IncidentCreated(id: UUID, severity: Severity, clip: Uri)
+  +IncidentAcknowledged(id: UUID, by: UUID, at: Instant)
+  +IncidentConfirmed(id: UUID, by: UUID, at: Instant)
+  +IncidentResolved(id: UUID, reason: String)
+}
+
+class InferenceResultEvent {
+  +cameraId: UUID
+  +farmId: UUID
+  +model: String
+  +class: String
+  +score: float
+  +frameUri: Uri
+  +ts: Instant
+}
+
+class Commands <<DeviceCommands>> {
+  +OpenFeeder(id: DeviceId, duration: Seconds)
+  +CloseFeeder(id: DeviceId)
+  +IncreaseWaterFlow(id: DeviceId, delta: int)
+  +AlarmSiren(zone: String, duration: Seconds)
+}
+
 ' Связи
 IncidentController --> IncidentService : команды/запросы
-IncidentEventHandler --> IncidentService : inbound сообщения
+InferenceResultHandler --> IncidentService : projectInference(evt)
+
 IncidentService --> IIncidentRepository : persist/query
 SqlIncidentRepository -up-|> IIncidentRepository
-IncidentService --> IDomainEventPublisher : publish
-AmqpEventPublisher -up-|> IDomainEventPublisher
+
+IncidentService --> IEventPublisher : publish domain events
+EventBusPublisher -up-|> IEventPublisher
+
+IncidentService --> IDeviceOrchestratorPort : управляющие команды
+DeviceOrchestratorClient -up-|> IDeviceOrchestratorPort
+
 IncidentService --> NotificationClient : уведомления/эскалации
 IncidentService --> MediaClient : presign links
 IncidentService --> ConfigClient : thresholds/roi/features
-IncidentService --> IncidentWorkflow : проверка переходов/SLA
+IncidentService --> IncidentWorkflow : переходы/SLA
 
-' Раскомментируйте связи ниже, чтобы показать зависимости моделей (что чем пользуется)
-'IncidentController ..> Dto : uses
-'IncidentEventHandler ..> Events : consumes
-'IncidentService ..> Incident : manipulates
-'IncidentService ..> Events : raises
-'IIncidentRepository ..> Incident : persists
-'SqlIncidentRepository ..> Incident : maps
-'IIncidentRepository ..> OutboxRecord : outbox
-'SqlIncidentRepository ..> OutboxRecord : outbox
-'IDomainEventPublisher ..> Events : publishes
-'AmqpEventPublisher ..> Events : publishes
+' Зависимостные связи на модели/DTO/Events/Commands
+IncidentController ..> Dto : uses
+InferenceResultHandler ..> InferenceResultEvent : consumes
+IncidentService ..> Incident : manipulates
+IncidentService ..> Events : raises
+IIncidentRepository ..> Incident : persists
+SqlIncidentRepository ..> OutboxRecord : outbox
+IEventPublisher ..> Events : publishes
+IDeviceOrchestratorPort ..> Commands : executes
+
+' Примечания
+note right of IncidentWorkflow
+  Status: NEW, ACKED, CONFIRMED, RESOLVED
+  Severity: LOW/MEDIUM/HIGH/CRITICAL
+  Transition: {ack, confirm, resolve, auto_close}
+end note
 
 @enduml
