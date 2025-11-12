@@ -1,0 +1,50 @@
+@startuml C1-main
+
+!includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+top to bottom direction
+
+title C1 — Платформа мониторинга скота (Edge-first)
+
+' Акторы
+Person(op, "Оператор фермы", "Реакция на события, подтверждение инцидентов")
+Person(vet, "Ветврач/Зоотехник", "Анализ состояния животных")
+Person(dir, "Директор хозяйства", "Сводная аналитика и KPI")
+Person(analyst, "Аналитик", "Работа с BI/отчётами")
+Person(mobile, "Мобильное приложение", "Уведомления, быстрые действия")
+
+' Системы
+System(central, "Центральная платформа", "Обработка событий, хранение данных, аналитика, управление моделями")
+System(edge, "Ферма / Edge", "Инференс моделей, локальное управление устройствами")
+
+' Внешние системы
+System_Ext(cam, "IP-камеры", "RTSP/ONVIF")
+System_Ext(sensors, "Датчики/актуаторы", "кормушки, поилки, фильтры воды")
+System_Ext(bi, "BI/ВИ-система", "Витрины/отчёты")
+System_Ext(erp, "ERP", "REST/ETL: справочники/склад")
+System_Ext(notif, "Сервис уведомлений", "SMS/Email/WebPush")
+
+' Связи внешних систем с Edge
+Rel(cam, edge, "Live-видео", "RTSP/WebRTC (LAN)")
+Rel(sensors, edge, "Телеметрия", "MQTT")
+
+' Связи внешних систем с центральной платформой
+Rel(bi, central, "Доступ к данным/артефактам", "S3/Pre-signed")
+Rel(central, notif, "Оповещения", "HTTPS/WebPush")
+Rel(central, erp, "Интеграции", "REST/ETL")
+
+' Связи Edge с центральной платформой
+Rel(edge, central, "Публикует события/телеметрию", "Kafka over TLS 1.3")
+Rel(edge, central, "Отправляет клипы/кадры по событию", "S3 API (pre-signed)")
+Rel(central, edge, "OTA-доставка артефактов моделей,\nполитики выката (canary/по локациям)", "HTTPS/S3")
+
+' Связи акторов с центральной платформой
+Rel(op, central, "Веб-портал", "HTTPS")
+Rel(vet, central, "Веб-портал", "HTTPS")
+Rel(mobile, central, "Мобильное приложение", "HTTPS")
+
+' Связи акторов с внешними системами
+Rel(analyst, bi, "Аналитика и отчёты", "BI")
+Rel(dir, bi, "Дашборды KPI", "BI")
+
+@enduml

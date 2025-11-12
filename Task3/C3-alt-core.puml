@@ -1,0 +1,79 @@
+@startuml C3-core-alt
+
+!includeurl https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+top to bottom direction
+
+title C3 — Core: Платформа мониторинга (Cloud-first)
+
+' Граница сервиса Core
+Container_Boundary(core, "Core: Платформа мониторинга") {
+
+  Component(IntApi, "Internal API (Core)", "REST/gRPC", "Эндпоинты для UI/интеграций: инциденты, управление, отчёты")
+  Component(Realtime, "Realtime Stream Adapter", "WS/SSE", "Пуш событий для онлайн-ленты в UI через API Gateway")
+
+  Component(ResultsSub, "Inference Results Subscriber", "EventBus consumer", "Подписка на inference.results")
+  Component(RuleEngine, "Rule Engine", "Rules/Correlation", "Корреляция результатов инференса, фильтры, дедупликация")
+  Component(IncidentSvc, "Incident Service", "Domain", "Жизненный цикл инцидентов, статусы, SLA, эскалации")
+  Component(DeviceOrch, "Device Orchestrator", "Saga/Orchestrator", "Команды устройствам, компенсации")
+
+  Component(IoTCmd, "IoT Command Adapter", "MQTT producer", "Публикация команд в IoT Core")
+  Component(MediaClient, "Media Client", "Client", "Pre-signed URL для клипов/кадров")
+  Component(ConfigClient, "Config Client", "Client", "Пороги/ROI/фичфлаги")
+  Component(NotifClient, "Notification Client", "Client", "SMS/Email/WebPush")
+  Component(ErpClient, "ERP Client", "Client", "REST/ETL интеграции")
+
+  Component(Repo, "Repositories", "DAL", "Incidents/Devices/Settings + Outbox")
+  Component(OutboxPub, "Outbox Publisher", "EventBus producer", "Публикация доменных событий incidents.*")
+  Component(TSWriter, "Telemetry Writer", "Writer", "Запись агрегатов/рядов в TSDB")
+}
+
+' ==== Соседи из C2-alt ====
+Container(eventBus, "Event Bus (pub/sub)", "Service", "inference.results, incidents, alerts")
+Container(iot, "IoT Core (MQTT)", "Broker", "Телеметрия/команды устройств")
+Container(mediaSvc, "Media Service", "Service", "Pre-signed URL")
+Container(configSvc, "Config/Feature Service", "Service", "Пороговые/ROI/фичи")
+Container(auth, "IAM/SSO", "Service", "OIDC/SAML; RBAC")
+Container(apiGw, "API Gateway", "Service", "REST/gRPC; WebSocket/SSE")
+ContainerDb(opDb, "Операционная БД", "PostgreSQL", "Инциденты, кейсы, справочники, outbox")
+ContainerDb(tsDb, "Хранилище телеметрии", "Timescale/ClickHouse", "Ряды и агрегаты")
+System_Ext(notif, "Сервис уведомлений", "SMS/Email/WebPush")
+System_Ext(erp, "ERP", "REST/ETL")
+
+' ==== Взаимодействия ====
+Rel(apiGw, IntApi, "Запросы UI/интеграций", "REST/gRPC")
+Rel(Realtime, apiGw, "Онлайновые события для ленты", "WS/SSE")
+
+Rel(ResultsSub, eventBus, "Подписка на inference.results", "subscribe")
+Rel(ResultsSub, RuleEngine, "Результаты инференса")
+Rel(RuleEngine, IncidentSvc, "Создание/обновление инцидентов")
+
+Rel(IncidentSvc, DeviceOrch, "Запуск/статус саг")
+Rel(DeviceOrch, IoTCmd, "Команды устройствам")
+Rel(IoTCmd, iot, "publish commands", "MQTT")
+
+Rel(IncidentSvc, MediaClient, "Ссылки на клипы/кадры")
+Rel(MediaClient, mediaSvc, "pre-signed URL")
+
+Rel(IncidentSvc, ConfigClient, "Пороги/ROI/фичи")
+Rel(ConfigClient, configSvc, "REST")
+
+Rel(IncidentSvc, NotifClient, "Оповещения/эскалации")
+Rel(NotifClient, notif, "HTTPS")
+
+Rel(IncidentSvc, ErpClient, "Интеграции")
+Rel(ErpClient, erp, "REST/ETL")
+
+Rel(IncidentSvc, Repo, "Чтение/запись")
+Rel(Repo, opDb, "SQL")
+
+Rel(IncidentSvc, OutboxPub, "Публикация доменных событий")
+Rel(OutboxPub, eventBus, "publish incidents.*")
+
+Rel(RuleEngine, TSWriter, "Агрегаты/метрики")
+Rel(TSWriter, tsDb, "SQL")
+
+' (Необязательно) валидация токенов на входе через шлюз
+Rel(apiGw, auth, "Валидация токенов", "OIDC/OAuth2")
+
+@enduml
